@@ -1,0 +1,327 @@
+
+# ba_meta require api 9
+# -*- coding: utf-8 -*-
+
+import babase
+import bauiv1 as bui
+
+plugin_name = 'BMS Fingilish'
+version = '21.0.0'
+
+CONFIG_KEY = 'BMSFingilish_Settings'
+
+FINGILISH_MAP = {
+    'آ': 'a', 'ا': 'a', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ث': 's',
+    'ج': 'j', 'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'z',
+    'ر': 'r', 'ز': 'z', 'ژ': 'zh', 'س': 's', 'ش': 'sh', 'ص': 's',
+    'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f',
+    'ق': 'gh', 'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n',
+    'و': 'v', 'ه': 'h', 'ی': 'y', 'ء': '', 'ئ': 'y', 'أ': 'a',
+    'إ': 'e', 'ؤ': 'o', '\u200c': '',
+}
+
+def to_fingilish(text):
+    try:
+        return ''.join(FINGILISH_MAP.get(c, c) for c in text)
+    except Exception:
+        return text
+
+
+# ba_meta export babase.Plugin
+class BMSFingilishPlugin(babase.Plugin):
+
+    def on_app_running(self):
+        try:
+            import bascenev1 as bs
+            self.bs = bs
+        except ImportError:
+            self.bs = None
+
+        try:
+            s = babase.app.config.get(CONFIG_KEY, {})
+            if not isinstance(s, dict):
+                s = {}
+            s.setdefault('enabled', True)
+            babase.app.config[CONFIG_KEY] = s
+            babase.app.config.commit()
+            self.settings = s
+        except Exception:
+            self.settings = {'enabled': True}
+
+        self._chat_btn = None
+
+        if self.bs:
+            self._hook_chat()
+
+        # هوک کردن پنجره‌ی صحیح چت/لابی
+        self._hook_party_window()
+
+    def _save(self):
+        try:
+            babase.app.config[CONFIG_KEY] = self.settings
+            babase.app.config.commit()
+        except Exception:
+            pass
+
+    def _toggle(self):
+        self.settings['enabled'] = not self.settings.get('enabled', True)
+        self._save()
+        on = self.settings['enabled']
+
+        try:
+            bui.screenmessage(
+                'BMS Fingilish: ' + ('ON' if on else 'OFF'),
+                color=(0, 1, 0) if on else (1, 0.4, 0),
+            )
+        except Exception:
+            pass
+
+        if self._chat_btn is not None:
+            try:
+                bui.buttonwidget(
+                    edit=self._chat_btn,
+                    label='Fingilish: ' + ('ON' if on else 'OFF'),
+                    color=(0.2, 0.7, 0.2) if on else (0.7, 0.2, 0.2),
+                )
+            except Exception:
+                pass
+
+    # ==================== هوک پنجره‌ی چت/لابی (کلاس صحیح) ====================
+    def _hook_party_window(self):
+        plugin = self
+        try:
+            # ایمپورت کلاس صحیح از ماژول bauiv1lib.party
+            from bauiv1lib.party import PartyWindow
+            orig_init = PartyWindow.init
+
+            def new_init(window_self, *args, **kwargs):
+                orig_init(window_self, *args, **kwargs)
+                try:
+                    plugin._add_chat_button(window_self)
+                except Exception as e:
+                    print('[BMS] add chat button error: ' + str(e))
+
+            PartyWindow.init = new_init
+            print('[BMS] PartyWindow hooked successfully')
+        except Exception as e:
+            print('[BMS] hook PartyWindow failed: ' + str(e))
+
+    def _add_chat_button(self, window):
+        """افزودن دکمه روشن/خاموش کنار جعبه ورودی چت"""
+        on = self.settings.get('enabled', True)
+        try:
+            # موقعیت دکمه نسبت به پنجره‌ی PartyWindow
+            # این مختصات ممکن است نیاز به تنظیم جزئی داشته باشد
+            self._chat_btn = bui.buttonwidget(
+                parent=window._root_widget,
+                position=(280, 10),  # کنار جعبه ورودی چت
+                size=(120, 40),
+                label='Fingilish: ' + ('ON' if on else 'OFF'),
+                color=(0.2, 0.7, 0.2) if on else (0.7, 0.2, 0.2),
+                on_activate_call=self._toggle,
+            )
+            print('[BMS] Chat button added to PartyWindow')
+        except Exception as e:
+            print('[BMS] create chat button failed: ' + str(e))
+
+# ==================== هوک چت (برای تبدیل پیام‌ها) ====================
+    def _hook_chat(self):
+        try:
+            if hasattr(self.bs, '_filterChatMessages'):
+                self._orig_filter = self.bs._filterChatMessages
+                self.bs._filterChatMessages = self._patched_filter
+                return
+        except Exception:
+            pass
+        try:
+            if hasattr(self.bs, 'chatmessage'):
+                self._orig_chat = self.bs.chatmessage
+                self.bs.chatmessage = self._patched_chat
+        except Exception:
+            pass
+
+    def _patched_chat(self, message, *args, **kwargs):
+        try:
+            if isinstance(message, str):
+                cmd = message.strip().lower()
+                if cmd == '/fingilish':
+                    self._toggle()
+                    return
+                if cmd == '/fingilish_ui':
+                    self._toggle()
+                    return
+                if self.settings.get('enabled', True):
+                    message = to_fingilish(message)
+        except Exception:
+            pass
+        if hasattr(self, '_orig_chat'):
+            return self._orig_chat(message, *args, **kwargs)
+
+    def _patched_filter(self, msg, clientID):
+        try:
+            if isinstance(msg, str):
+                cmd = msg.strip().lower()
+                if cmd == '/fingilish':
+                    self._toggle()
+                    return None
+                if cmd == '/fingilish_ui':
+                    self._toggle()
+                    return None
+                if self.settings.get('enabled', True):
+                    msg = to_fingilish(msg)
+        except Exception:
+            pass
+        if hasattr(self, '_orig_filter'):
+            return self._orig_filter(msg, clientID)
+        return msg
+
+
+# ============================================================
+# BMSSquad Auto Announcer
+# افزودن بدون تغییر در کدهای قبلی
+# ============================================================
+
+# ذخیره نسخه اصلی فیلتر چت قبل از اینکه پلاگین Fingilish اون رو patch کنه
+try:
+    import bascenev1 as _bs_orig_mod
+    _BMS_ORIGINAL_CHAT_FILTER = _bs_orig_mod._filterChatMessages
+except Exception:
+    _BMS_ORIGINAL_CHAT_FILTER = None
+
+
+# ba_meta export babase.Plugin
+class BMSSquadAnnouncerPlugin(babase.Plugin):
+    """ارسال خودکار پیام تبلیغاتی هنگام ورود به مپ بازی."""
+
+    ANNOUNCE_MESSAGE = '💛مرجع دانلود خفن ترین مود های بازی💥Bms_Squad🌹'
+    JOIN_DELAY = 3.0       # ۳ ثانیه بعد از ورود
+    REPEAT_DELAY = 300.0   # هر ۵ دقیقه
+
+    def on_app_running(self):
+        try:
+            import bascenev1 as bs
+            self.bs = bs
+        except ImportError:
+            self.bs = None
+            return
+
+        self._in_game = False
+        self._announce_gen = 0
+
+        # شروع پایش ورود/خروج از مپ
+        babase.apptimer(1.0, self._poll_activity)
+
+    # ---------- تشخیص ورود به مپ ----------
+    def _poll_activity(self):
+        try:
+            activity = self.bs.get_foreground_host_activity()
+            is_game = self._is_game_activity(activity)
+
+            if is_game and not self._in_game:
+                self._in_game = True
+                self._start_announcements()
+            elif not is_game and self._in_game:
+                self._in_game = False
+                self._stop_announcements()
+        except Exception:
+            pass
+        finally:
+            babase.apptimer(1.0, self._poll_activity)
+
+    def _is_game_activity(self, activity):
+        if activity is None:
+            return False
+        try:
+            if getattr(activity, 'is_main_game_activity', False):
+                return True
+            players = getattr(activity, 'players', None)
+            if players is not None:
+                try:
+                    if len(players) > 0:
+
+return True
+                except Exception:
+                    pass
+            mod = (activity.class.module or '').lower()
+            if 'game' in mod and 'menu' not in mod and 'ui' not in mod:
+                return True
+        except Exception:
+            pass
+        return False
+
+    # ---------- زمان‌بندی ارسال ----------
+    def _start_announcements(self):
+        self._announce_gen += 1
+        gen = self._announce_gen
+
+        def first_send():
+            if self._announce_gen != gen or not self._in_game:
+                return
+            self._send_message()
+
+            def repeat_send():
+                if self._announce_gen != gen or not self._in_game:
+                    return
+                self._send_message()
+                babase.apptimer(self.REPEAT_DELAY, repeat_send)
+
+            babase.apptimer(self.REPEAT_DELAY, repeat_send)
+
+        babase.apptimer(self.JOIN_DELAY, first_send)
+
+    def _stop_announcements(self):
+        self._announce_gen += 1
+
+    # ---------- ارسال پیام ----------
+    def _send_message(self):
+        msg = self.ANNOUNCE_MESSAGE
+
+        # موقتاً فیلتر Fingilish رو غیرفعال کن تا پیام فارسی خراب نشه
+        bypassed = False
+        saved_filter = None
+        try:
+            current = getattr(self.bs, '_filterChatMessages', None)
+            if (_BMS_ORIGINAL_CHAT_FILTER is not None
+                    and current is not None
+                    and current is not _BMS_ORIGINAL_CHAT_FILTER):
+                saved_filter = current
+                self.bs._filterChatMessages = _BMS_ORIGINAL_CHAT_FILTER
+                bypassed = True
+        except Exception:
+            pass
+
+        try:
+            self._do_send(msg)
+        finally:
+            if bypassed and saved_filter is not None:
+                try:
+                    self.bs._filterChatMessages = saved_filter
+                except Exception:
+                    pass
+
+    def _do_send(self, msg):
+        # روش ۱: ارسال از طریق سشن (کلاینت یا هاست)
+        for getter_name in ('get_client_session', 'get_foreground_host_session'):
+            try:
+                getter = getattr(self.bs, getter_name, None)
+                if not getter:
+                    continue
+                session = getter()
+                if session is None:
+                    continue
+                for m_name in ('chat_message', '_send_chat_message', 'send_chat_message'):
+                    m = getattr(session, m_name, None)
+                    if callable(m):
+                        try:
+                            m(msg)
+                            return
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+        # روش ۲: نمایش محلی به‌عنوان fallback
+        try:
+            self.bs.chatmessage(msg)
+        except Exception:
+            pass
